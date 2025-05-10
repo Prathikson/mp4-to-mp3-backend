@@ -8,8 +8,17 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+// ✅ Allow CORS (replace * with your Vercel frontend URL for security)
+app.use(cors({
+  origin: '*', // or 'https://your-vercel-app.vercel.app'
+}));
+
 app.use(express.static('converted')); // Serve converted files
+
+// ✅ Root route for Render health check
+app.get('/', (req, res) => {
+  res.send('🎧 MP4 to MP3 Backend is Live!');
+});
 
 // Ensure upload directories exist
 ['uploads', 'converted'].forEach((dir) => {
@@ -22,27 +31,20 @@ if (!fs.existsSync(counterFilePath)) {
   fs.writeFileSync(counterFilePath, JSON.stringify({ count: 0, lastResetDate: new Date().toISOString() }));
 }
 
-// Read conversion count from file
+// Conversion count logic
 const getConversionCount = () => {
   try {
-    const data = JSON.parse(fs.readFileSync(counterFilePath, 'utf8'));
-    return data;
-  } catch (err) {
-    console.error('Error reading conversion count:', err);
+    return JSON.parse(fs.readFileSync(counterFilePath, 'utf8'));
+  } catch {
     return { count: 0, lastResetDate: new Date().toISOString() };
   }
 };
 
-// Update conversion count in the file
 const updateConversionCount = (count, resetDate) => {
-  try {
-    fs.writeFileSync(counterFilePath, JSON.stringify({ count, lastResetDate: resetDate }));
-  } catch (err) {
-    console.error('Error updating conversion count:', err);
-  }
+  fs.writeFileSync(counterFilePath, JSON.stringify({ count, lastResetDate: resetDate }));
 };
 
-// Multer storage config
+// Multer config
 const storage = multer.diskStorage({
   destination: 'uploads/',
   filename: (req, file, cb) => {
@@ -51,7 +53,6 @@ const storage = multer.diskStorage({
   },
 });
 
-// File filter for mp4 only
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
@@ -60,17 +61,16 @@ const upload = multer({
   },
 });
 
-// POST /convert route
+// POST /convert
 app.post('/convert', upload.single('file'), (req, res) => {
   const { count, lastResetDate } = getConversionCount();
   const today = new Date().toISOString().split('T')[0];
 
-  // Reset count if it's a new day
+  // Reset count daily
   if (today !== new Date(lastResetDate).toISOString().split('T')[0]) {
     updateConversionCount(0, new Date().toISOString());
   }
 
-  // Check if the user has exceeded the conversion limit
   if (count >= 3) {
     return res.status(403).json({ error: 'You’ve hit 3 free conversions today. Please upgrade to Pro.' });
   }
@@ -82,59 +82,53 @@ app.post('/convert', upload.single('file'), (req, res) => {
   ffmpeg(inputPath)
     .toFormat('mp3')
     .on('end', () => {
-      // Increment conversion count
-      const updatedCount = count + 1;
-      updateConversionCount(updatedCount, new Date().toISOString());
+      updateConversionCount(count + 1, new Date().toISOString());
 
-      // Send the download URL for the MP3 file
-      const downloadUrl = `http://localhost:${PORT}/download/${outputName}`;
-      
-      // Clean up the uploaded MP4 file and the converted MP3 file after 5 minutes
+      // ✅ Use req.protocol + req.get('host') to get public Render URL
+      const host = req.get('host');
+      const downloadUrl = `${req.protocol}://${host}/download/${outputName}`;
+
+      // Auto-delete files after 1 minute
       setTimeout(() => {
         try {
-          fs.unlinkSync(inputPath); // Remove MP4 file
-          fs.unlinkSync(outputPath); // Remove MP3 file
+          fs.unlinkSync(inputPath);
+          fs.unlinkSync(outputPath);
         } catch (err) {
-          console.error('Error deleting files:', err);
+          console.error('Cleanup error:', err);
         }
-      }, 1000 * 60 * 1); // Wait 1 minute (1000 ms)
+      }, 60000);
 
-      res.json({ success: true, fileName: outputName, downloadUrl });
+      res.json({ success: true, fileName: outputName, downloadUrl, count: count + 1 });
     })
     .on('error', (err) => {
       console.error('FFmpeg error:', err.message);
-      fs.unlinkSync(inputPath); // Remove MP4 file on error as well
+      fs.unlinkSync(inputPath);
       res.status(500).json({ error: 'Conversion failed. Try again later.' });
     })
     .save(outputPath);
 });
 
-// Route to get the current global conversion count
+// GET /conversionCount
 app.get('/conversionCount', (req, res) => {
   const { count, lastResetDate } = getConversionCount();
-  res.json({ count, lastResetDate });
+  res.json({ totalCount: count, lastResetDate });
 });
 
-// Add a route to serve the MP3 files with proper download headers
+// GET /download/:filename
 app.get('/download/:filename', (req, res) => {
   const fileName = req.params.filename;
   const filePath = path.join(__dirname, 'converted', fileName);
 
   fs.access(filePath, fs.constants.F_OK, (err) => {
-    if (err) {
-      return res.status(404).json({ error: 'File not found' });
-    }
+    if (err) return res.status(404).json({ error: 'File not found' });
 
-    // Set headers to force file download
     res.setHeader('Content-Type', 'audio/mp3');
     res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
-
-    // Send the file to the client for download
     res.sendFile(filePath);
   });
 });
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`✅ Server is running at http://localhost:${PORT}`);
+  console.log(`✅ Server is running on port ${PORT}`);
 });
