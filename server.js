@@ -8,6 +8,15 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Force HTTPS in production
+app.use((req, res, next) => {
+  if (req.headers['x-forwarded-proto'] !== 'https') {
+    return res.redirect('https://' + req.headers.host + req.url);
+  }
+  next();
+});
+
+
 // ✅ Allow CORS (replace * with your Vercel frontend URL for security)
 app.use(cors({
   origin: 'https://mp4-to-mp3-frontend.vercel.app', 
