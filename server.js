@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 5000;
 
 // ✅ Allow CORS (replace * with your Vercel frontend URL for security)
 app.use(cors({
-  origin: 'https://mp4-to-mp3-frontend.vercel.app/', 
+  origin: 'https://mp4-to-mp3-frontend.vercel.app', 
   methods: ['POST', 'GET'],// or 'https://your-vercel-app.vercel.app'
 }));
 
