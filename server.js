@@ -8,18 +8,24 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ✅ Robust CORS config to avoid trailing slash issues
-const allowedOrigins = [
-  'https://mp4-to-mp3-frontend.vercel.app',
-  'https://mp4-to-mp3-frontend.vercel.app/',
-];
-
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow no-origin requests (mobile apps, Postman, curl)
+    if (!origin) return callback(null, true);
+
+    const allowed = [
+      'https://mp4-to-mp3-frontend.vercel.app',
+      'https://mp4tomp3.xtoicstudio.com',
+      'http://localhost:3000',
+      'http://localhost:3001',
+    ];
+
+    // Strip trailing slash before comparing
+    const clean = origin.replace(/\/$/, '');
+    if (allowed.includes(clean)) {
       callback(null, true);
     } else {
-      callback(new Error('CORS not allowed from this origin: ' + origin));
+      callback(new Error('CORS not allowed from: ' + origin));
     }
   },
   methods: ['POST', 'GET'],
@@ -27,12 +33,17 @@ app.use(cors({
 
 app.use(express.static('converted'));
 
-// ✅ Root route for health check
+// Root health check
 app.get('/', (req, res) => {
-  res.send('🎧 MP4 to MP3 Backend is Live!');
+  res.send('MP4 to MP3 Backend is Live!');
 });
 
-// Ensure necessary directories
+// Keep-alive self-ping to prevent Render free tier from sleeping
+setInterval(() => {
+  require('https').get('https://mp4-to-mp3-backend-hu8o.onrender.com/').on('error', () => {});
+}, 14 * 60 * 1000);
+
+// Ensure necessary directories exist
 ['uploads', 'converted'].forEach((dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir);
 });
@@ -72,17 +83,19 @@ const upload = multer({
   },
 });
 
-// ✅ Convert route
+// Convert route
 app.post('/convert', upload.single('file'), (req, res) => {
-  const { count, lastResetDate } = getConversionCount();
+  let { count, lastResetDate } = getConversionCount();
   const today = new Date().toISOString().split('T')[0];
 
+  // Reset daily counter if it's a new day
   if (today !== new Date(lastResetDate).toISOString().split('T')[0]) {
+    count = 0;
     updateConversionCount(0, new Date().toISOString());
   }
 
   if (count >= 3) {
-    return res.status(403).json({ error: 'You’ve hit 3 free conversions today. Please upgrade to Pro.' });
+    return res.status(403).json({ error: "You've hit 3 free conversions today. Please upgrade to Pro." });
   }
 
   const inputPath = req.file.path;
@@ -95,35 +108,33 @@ app.post('/convert', upload.single('file'), (req, res) => {
       updateConversionCount(count + 1, new Date().toISOString());
 
       const host = req.get('host');
-      const downloadUrl = `https://${host}/download/${encodeURIComponent(outputName)}`;
+      const isLocal = host.includes('localhost') || host.includes('127.0.0.1');
+      const protocol = isLocal ? 'http' : 'https';
+      const downloadUrl = `${protocol}://${host}/download/${encodeURIComponent(outputName)}`;
 
-      // Delete after 5 minutes
+      // Auto-delete files after 5 minutes
       setTimeout(() => {
-        try {
-          fs.unlinkSync(inputPath);
-          fs.unlinkSync(outputPath);
-        } catch (err) {
-          console.error('Cleanup error:', err);
-        }
+        try { fs.unlinkSync(inputPath); } catch {}
+        try { fs.unlinkSync(outputPath); } catch {}
       }, 1000 * 60 * 5);
 
       res.json({ success: true, fileName: outputName, downloadUrl, count: count + 1 });
     })
     .on('error', (err) => {
       console.error('FFmpeg error:', err.message);
-      fs.unlinkSync(inputPath);
+      try { fs.unlinkSync(inputPath); } catch {}
       res.status(500).json({ error: 'Conversion failed. Try again later.' });
     })
     .save(outputPath);
 });
 
-// ✅ Conversion count route
+// Conversion count route
 app.get('/conversionCount', (req, res) => {
   const { count, lastResetDate } = getConversionCount();
   res.json({ totalCount: count, lastResetDate });
 });
 
-// ✅ Download route (safe + fixes mixed content)
+// Download route
 app.get('/download/:filename', (req, res) => {
   const safeName = path.basename(req.params.filename);
   const filePath = path.join(__dirname, 'converted', safeName);
@@ -145,7 +156,6 @@ app.get('/download/:filename', (req, res) => {
   });
 });
 
-// ✅ Start server
 app.listen(PORT, () => {
-  console.log(`✅ Server is running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
